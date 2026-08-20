@@ -1,0 +1,36 @@
+[project]
+name = "pyutils"
+version = "0.0.0"
+description = "Monorepo of independent Python utilities"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+exclude = ["packages/_template"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["packages"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["packages"]
+extend-exclude = [
+    "packages/workflow-engine/src/workflow_engine/engine.py",
+    "templates",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "W"]

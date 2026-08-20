@@ -716,7 +716,7 @@ if __name__ == "__main__":
     )
 
     # Define workflow
-    workflow = Workflow(id=str(uuid.uuid4 EPI)(), steps=[step1], storage_backend=storage_backend)
+    workflow = Workflow(id=str(uuid.uuid4()), steps=[step1], storage_backend=storage_backend)
 
     # Execute workflow
     import asyncio

@@ -3,6 +3,20 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# uv / workspace
+.venv/
+
+# Local runtime files from packages
+workflow_state.db
+workflow_state.json
+step_logs.json
+workflow.log
+
 # C extensions
 *.so
 
