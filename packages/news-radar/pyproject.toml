@@ -1,0 +1,18 @@
+[project]
+name = "news-radar"
+version = "0.1.0"
+description = "Local-first OSINT/news radar: RSS ingest, interest filtering, LLM insights, static JSON+SPA output"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+news-radar = "news_radar.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/news_radar"]
