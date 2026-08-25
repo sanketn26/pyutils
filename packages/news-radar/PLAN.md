@@ -504,10 +504,27 @@ data/news_radar.db (story_clusters + articles + entity/causal context) + interes
 - Deliverable: one documented command (or manual `cp -r`) turns the local `output/` +
   `frontend/` into a deployable static site.
 
+### Phase 12 — Distributed worker pool (future, post-v1)
+Scaling path if/when running as multiple worker processes in a pod instead of the
+single-process `daemon` (Phase 10): a coordinator hands out **per-source gather jobs**
+(one job = one `Source` run through gather) to workers, which pull work via
+work-stealing rather than a static assignment, so a slow/idle worker doesn't stall
+others. Coordination state (job queue: pending/claimed/done, lease/heartbeat per
+claim, retry on worker death) lives in **Postgres**, not SQLite — SQLite's
+single-writer model doesn't hold up under multiple concurrent worker processes
+claiming jobs, which is exactly the scenario this phase exists for. This is additive
+infra for the pod deployment mode only; single-process local-first usage (Phases
+0–11) is unaffected and keeps using SQLite. Analyze and brief stay single-process for
+now (they're already cheap/batch); only gather — the expensive, embarrassingly
+parallel-by-source stage — gets distributed. Deferred until the single-process daemon
+is actually a bottleneck; no code yet.
+
 ---
 
 ## Explicitly out of scope for v1 (avoid over-engineering)
-- No multi-user auth, no server-side rendering, no database beyond SQLite.
+- No multi-user auth, no server-side rendering. SQLite is the only datastore for
+  single-process/local-first use (Phases 0–11); Postgres is introduced only for the
+  distributed worker pool's job queue (Phase 12, future/post-v1).
 - No pluggable LLM providers — Ollama only, matching the local-first constraint.
 - No feed-discovery/crawling beyond configured sources.
 - No historical-brief browsing UI beyond `latest.json` (deferred nicety in Phase 9 notes).
