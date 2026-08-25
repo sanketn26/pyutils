@@ -86,7 +86,7 @@ endef
 test:
 ifdef PKG
 	$(require_pkg)
-	$(UV) run --package "$(PKG)" pytest "$(PACKAGES_DIR)/$(PKG)"
+	$(UV) run --package "$(PKG)" --group dev pytest "$(PACKAGES_DIR)/$(PKG)"
 else
 	$(UV) run pytest $(PACKAGES_DIR)
 endif
