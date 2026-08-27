@@ -5,7 +5,10 @@ description = "Local-first OSINT/news radar: RSS ingest, interest filtering, LLM
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
-dependencies = []
+dependencies = [
+    "alembic>=1.19.1",
+    "psycopg2-binary>=2.9.12",
+]
 
 [project.scripts]
 news-radar = "news_radar.__main__:main"

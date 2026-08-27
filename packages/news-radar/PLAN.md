@@ -21,7 +21,7 @@ Three decoupled stages, not one monolithic pipeline:
 
 - **Gather** — expensive, runs on a schedule (network + per-item LLM calls). Pulls raw
   items from sources, enriches each one independently (dedup, embed, summarize), and
-  writes flat enriched records to SQLite. It does **not** know about interests, other
+  writes flat enriched records to Postgres. It does **not** know about interests, other
   articles, or cross-item context — enrichment only ever adds data to a single item.
 - **Analyze** — a background pass over the accumulated store, not per-item. Runs after
   gather (or on its own timer over whatever's accumulated since it last ran) and
@@ -107,7 +107,7 @@ packages/news-radar/
 │   ├── __main__.py                  # CLI: gather / analyze / brief / daemon / serve
 │   ├── config.py                    # load + validate sources.yaml / interests.yaml (pydantic)
 │   ├── models.py                    # Article, StoryCluster, EntityEdge, CausalLink, Interest, BriefItem, Brief
-│   ├── db.py                        # SQLite schema + connection helper (all tables, one place)
+│   ├── db.py                        # Postgres connection helper (psycopg2, DSN from NEWS_RADAR_DSN); schema via alembic/versions/
 │   ├── domain/
 │   │   ├── __init__.py
 │   │   └── interfaces.py            # Filter / Pipe / Sink / Pipeline (drafted) + Analyzer / AnalysisPipeline (to add)
@@ -117,12 +117,12 @@ packages/news-radar/
 │   │   └── webpage.py               # WebpagePipe(Pipe): trivial readability-style single-page fetch
 │   ├── enrich/
 │   │   ├── __init__.py
-│   │   ├── dedup.py                 # DedupFilter(Filter): URL-hash seen-check against SQLite, drops seen
-│   │   ├── semantic.py              # EmbedFilter(Filter): Ollama embedding, attaches vector, caches in SQLite
+│   │   ├── dedup.py                 # DedupFilter(Filter): URL-hash seen-check against Postgres, drops seen
+│   │   ├── semantic.py              # EmbedFilter(Filter): Ollama embedding, attaches vector, caches in Postgres
 │   │   └── insight.py               # InsightFilter(Filter): Ollama generate, attaches summary/insight/entities
 │   ├── sinks/
 │   │   ├── __init__.py
-│   │   └── sqlite_sink.py           # SqliteSink(Sink): persists one enriched Article (flat, no interest grouping)
+│   │   └── postgres_sink.py         # PostgresSink(Sink): persists one enriched Article (flat, no interest grouping)
 │   ├── analysis/
 │   │   ├── __init__.py
 │   │   ├── clustering.py            # ClusterAnalyzer: groups same-story articles across sources
@@ -146,8 +146,9 @@ packages/news-radar/
 │   ├── latest.json
 │   └── briefs/
 │       └── <ISO-timestamp>.json
-├── data/                            # generated; gitignored
-│   └── news_radar.db                # SQLite: articles, embeddings cache, story_clusters, entity graph, causal_links
+├── data/                            # (Postgres holds all state — articles, embeddings cache,
+│                                    #  story_clusters, entity graph, causal_links — in a local
+│                                    #  `news_radar` database; DSN via config/env)
 └── tests/
     ├── test_smoke.py
     ├── test_dedup_filter.py
@@ -166,9 +167,10 @@ Design notes:
   fetches a JSON file by relative path, so `output/` (JSON) + `frontend/` (SPA) can be
   copied as-is into a GitHub Pages branch/folder later. For local-first use, `output/`
   and `frontend/` are served side-by-side by one dev server (Phase 9).
-- `config/` is YAML, hand-edited by the user; `data/` and `output/` are generated and
-  gitignored (add `packages/news-radar/data/` and `packages/news-radar/output/*` minus
-  `.gitkeep`/`latest.json` sample to root `.gitignore`).
+- `config/` is YAML, hand-edited by the user; `output/` is generated and gitignored
+  (add `packages/news-radar/output/*` minus `.gitkeep`/`latest.json` sample to root
+  `.gitignore`). All persistent state lives in a local Postgres database
+  (`news_radar`), connected via a DSN from config/env.
 - `gather.py` owns the enrichment `Pipeline`; `analyze.py` owns the cross-article
   `AnalysisPipeline`; `brief.py` owns interest ranking. None duplicates another's job —
   `daemon.py` just calls all three on their own timers, `__main__.py gather` /
@@ -268,15 +270,15 @@ analyze writes are separate, simpler shapes — `brief.py` is what turns all of 
 | `domain/interfaces.py` | `Filter`, `Pipe`, `Sink` ABCs + generic `Pipeline` that streams `produce → filter chain → consume`. Source-, enrichment-, and storage-agnostic. |
 | `config.py` | Load and validate `sources.yaml` + `interests.yaml` into typed objects. Fail fast with a clear error on malformed config. |
 | `models.py` | All shared data shapes: `Source`, `Interest`, `Article` (flat, enriched), `StoryCluster`, `EntityEdge`, `CausalLink`, `BriefItem`, `BriefInterest`, `Brief`. |
-| `db.py` | SQLite connection + schema for every table: `articles`, `embeddings_cache`, `story_clusters`, `entity_mentions`, `entity_cooccurrence`, `causal_links`. One function per query — no ORM. |
+| `db.py` | Postgres connection helper (psycopg2, DSN from `NEWS_RADAR_DSN`). Schema is owned by alembic migrations (`alembic/versions/`): `articles`, `embeddings_cache`, `story_clusters`, `entity_mentions`, `entity_cooccurrence`, `causal_links`. Queries live in `repository/` — one method per query, no ORM. |
 | `ingest/rss.py` | `RssPipe(Pipe)`: given `Source`s, fetch + parse feeds (via `feedparser`), yield raw `Article`s (title/url/published_at/source/raw_content populated, no enrichment yet). |
 | `ingest/webpage.py` | `WebpagePipe(Pipe)`: given plain-page `Source`s, fetch HTML, extract main text (e.g. `trafilatura`), yield a single `Article`. |
-| `enrich/dedup.py` | `DedupFilter(Filter)`: drop (return `None`) already-seen URLs (by id hash) against the SQLite `articles` table; new items pass through unchanged. |
-| `enrich/semantic.py` | `EmbedFilter(Filter)`: embed article text via Ollama embeddings, attach the vector to the `Article`, cache in SQLite keyed by article id. No cross-article comparison here — just attaches data. |
+| `enrich/dedup.py` | `DedupFilter(Filter)`: drop (return `None`) already-seen URLs (by id hash) against the Postgres `articles` table; new items pass through unchanged. |
+| `enrich/semantic.py` | `EmbedFilter(Filter)`: embed article text via Ollama embeddings, attach the vector to the `Article`, cache in Postgres keyed by article id. No cross-article comparison here — just attaches data. |
 | `enrich/insight.py` | `InsightFilter(Filter)`: build a summarization prompt from the `Article`, call `ollama_client.generate`, attach `summary`, `insight`, `entities` to the `Article`. (`novelty` moves to analyze — see §5.) |
-| `sinks/sqlite_sink.py` | `SqliteSink(Sink)`: persist one fully-enriched `Article` into the flat `articles` table (upsert by id). |
+| `sinks/postgres_sink.py` | `PostgresSink(Sink)`: persist one fully-enriched `Article` into the flat `articles` table (upsert by id). |
 | `llm/ollama_client.py` | `generate(prompt, model) -> str` and `embed(text, model) -> list[float]`, talking to local Ollama HTTP API (`localhost:11434`). Timeouts + retries only — no fallback provider (local-first, single-provider by design). |
-| `gather.py` | `run_once(config) -> int` (count of new articles): builds `Pipeline(RssPipe/WebpagePipe, [DedupFilter, EmbedFilter, InsightFilter], SqliteSink)` from config and runs it. |
+| `gather.py` | `run_once(config) -> int` (count of new articles): builds `Pipeline(RssPipe/WebpagePipe, [DedupFilter, EmbedFilter, InsightFilter], PostgresSink)` from config and runs it. |
 
 Gather call order:
 
@@ -285,7 +287,7 @@ sources.yaml → RssPipe.produce / WebpagePipe.produce → Article (raw)
              → DedupFilter   (drops already-seen, else pass through)
              → EmbedFilter   (attaches embedding vector, cached)
              → InsightFilter (attaches summary/insight/entities)
-             → SqliteSink.consume → data/news_radar.db (flat articles table)
+             → PostgresSink.consume → Postgres `news_radar` db (flat articles table)
 ```
 
 ## 5. Python module structure — analyze stage
@@ -302,12 +304,12 @@ sources.yaml → RssPipe.produce / WebpagePipe.produce → Article (raw)
 Analyze call order:
 
 ```
-data/news_radar.db (enriched articles, window since last analyze run)
+Postgres `news_radar` db (enriched articles, window since last analyze run)
              → ClusterAnalyzer     (group same-story articles → story_clusters)
              → EntityGraphAnalyzer (update entity_mentions / entity_cooccurrence)
              → NoveltyAnalyzer     (classify novelty + trend_velocity per cluster)
              → CausalityAnalyzer   (shortlist via entity graph → LLM judge → causal_links)
-             → data/news_radar.db (story_clusters, entity graph, causal_links updated)
+             → Postgres `news_radar` db (story_clusters, entity graph, causal_links updated)
 ```
 
 ## 6. Python module structure — brief stage
@@ -322,7 +324,7 @@ data/news_radar.db (enriched articles, window since last analyze run)
 Brief call order:
 
 ```
-data/news_radar.db (story_clusters + articles + entity/causal context) + interests.yaml
+Postgres `news_radar` db (story_clusters + articles + entity/causal context) + interests.yaml
              → for each Interest:
                    keyword score + semantic cosine (cluster centroid vs interest seed embedding)
                    → combined score → rank → take top N
@@ -366,17 +368,21 @@ data/news_radar.db (story_clusters + articles + entity/causal context) + interes
 - Fix the mutable-default-argument bug in `Pipeline.__init__` (§1) and decide/implement
   the `Filter` "drop via `None`" convention needed by dedup.
 - Add deps: `feedparser`, `pyyaml`, `pydantic`, `trafilatura` (webpage extraction).
+  (`psycopg2` and `alembic` already added; schema lives in alembic migrations under
+  `alembic/versions/`, connections come from `db.py`, queries live in
+  `repository/` — see README "Database setup".)
 - `config.py` + `config/sources.yaml` + `config/interests.yaml` (2-3 sample entries
   each) — load and validate. `interests.yaml` isn't consumed until Phase 8, but
   validating it early catches config errors sooner.
 - `models.py` — `Source`, `Interest`, `Article` (raw + slots for enrichment fields).
-- `db.py` — SQLite schema for the flat `articles` table.
+- `db.py` — Postgres connection helper (DSN from config/env) + schema for the flat
+  `articles` table.
 - `ingest/rss.py` — `RssPipe` parsing a feed URL into an `Article` stream.
-- `enrich/dedup.py` — `DedupFilter`, hash-based seen-check against SQLite.
-- `sinks/sqlite_sink.py` — `SqliteSink` persisting raw (not-yet-enriched-further)
+- `enrich/dedup.py` — `DedupFilter`, hash-based seen-check against Postgres.
+- `sinks/postgres_sink.py` — `PostgresSink` persisting raw (not-yet-enriched-further)
   `Article`s.
 - `gather.py` + `__main__.py gather` subcommand — runs `Pipeline(RssPipe, [DedupFilter],
-  SqliteSink)`, prints count of new articles.
+  PostgresSink)`, prints count of new articles.
 - Tests: `test_dedup_filter.py`, `test_pipeline.py` (fake `Pipe`/`Sink`), a fixture RSS
   XML file, ingest→dedup round-trip.
 - Deliverable: `news-radar gather` against real feeds prints new-article counts,
@@ -384,8 +390,8 @@ data/news_radar.db (story_clusters + articles + entity/causal context) + interes
 
 ### Phase 2 — Semantic enrichment
 - `enrich/semantic.py` — `EmbedFilter`: Ollama embeddings, attaches vector to
-  `Article`, cached in SQLite `embeddings_cache` (keyed by article id) so re-runs don't
-  re-embed unchanged articles.
+  `Article`, cached in the Postgres `embeddings_cache` table (keyed by article id) so
+  re-runs don't re-embed unchanged articles.
 - Add `EmbedFilter` to the gather `Pipeline` filter list.
 - Tests: stubbed embedding function (no live Ollama dependency in CI).
 - Deliverable: gathered articles carry a cached embedding vector; still no
@@ -400,8 +406,8 @@ data/news_radar.db (story_clusters + articles + entity/causal context) + interes
 - Add `InsightFilter` to the gather `Pipeline` filter list.
 - Tests: `test_pipeline.py` extended with a fake LLM client (no live Ollama needed).
 - Deliverable: `news-radar gather` produces fully-enriched flat article records in
-  `data/news_radar.db` from real feeds through a local Ollama model. Gather stage is
-  now complete end to end.
+  Postgres from real feeds through a local Ollama model. Gather stage is now complete
+  end to end.
 
 ### Phase 4 — Analysis stage begins: story clustering
 - Add `Analyzer` + `AnalysisPipeline` to `domain/interfaces.py` (§1).
@@ -510,11 +516,12 @@ single-process `daemon` (Phase 10): a coordinator hands out **per-source gather 
 (one job = one `Source` run through gather) to workers, which pull work via
 work-stealing rather than a static assignment, so a slow/idle worker doesn't stall
 others. Coordination state (job queue: pending/claimed/done, lease/heartbeat per
-claim, retry on worker death) lives in **Postgres**, not SQLite — SQLite's
-single-writer model doesn't hold up under multiple concurrent worker processes
-claiming jobs, which is exactly the scenario this phase exists for. This is additive
-infra for the pod deployment mode only; single-process local-first usage (Phases
-0–11) is unaffected and keeps using SQLite. Analyze and brief stay single-process for
+claim, retry on worker death) lives in the same **Postgres** database the rest of the
+pipeline already uses — Postgres's MVCC and row-level locking (`SELECT ... FOR UPDATE
+SKIP LOCKED`) handle multiple concurrent worker processes claiming jobs natively, so
+no new datastore is needed for this phase. This is additive infra for the pod
+deployment mode only; single-process local-first usage (Phases 0–11) is unaffected.
+Analyze and brief stay single-process for
 now (they're already cheap/batch); only gather — the expensive, embarrassingly
 parallel-by-source stage — gets distributed. Deferred until the single-process daemon
 is actually a bottleneck; no code yet.
@@ -522,9 +529,9 @@ is actually a bottleneck; no code yet.
 ---
 
 ## Explicitly out of scope for v1 (avoid over-engineering)
-- No multi-user auth, no server-side rendering. SQLite is the only datastore for
-  single-process/local-first use (Phases 0–11); Postgres is introduced only for the
-  distributed worker pool's job queue (Phase 12, future/post-v1).
+- No multi-user auth, no server-side rendering. Postgres is the only datastore —
+  articles, caches, and analysis tables from Phase 1 onward, plus the distributed
+  worker pool's job queue when Phase 12 (future/post-v1) lands.
 - No pluggable LLM providers — Ollama only, matching the local-first constraint.
 - No feed-discovery/crawling beyond configured sources.
 - No historical-brief browsing UI beyond `latest.json` (deferred nicety in Phase 9 notes).
