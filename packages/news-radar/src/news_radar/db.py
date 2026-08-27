@@ -20,7 +20,7 @@ def get_dsn() -> str:
 
 
 @contextmanager
-def get_connection(dsn: str | None = None) -> Generator[PgConnection]:
+def get_connection(dsn: str | None = None) -> Generator[PgConnection, None, None]:
     """Yield a connection; commit on clean exit, roll back on exception."""
     conn = psycopg2.connect(dsn or get_dsn())
     try:

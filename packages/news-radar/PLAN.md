@@ -107,7 +107,7 @@ packages/news-radar/
 │   ├── __main__.py                  # CLI: gather / analyze / brief / daemon / serve
 │   ├── config.py                    # load + validate sources.yaml / interests.yaml (pydantic)
 │   ├── models.py                    # Article, StoryCluster, EntityEdge, CausalLink, Interest, BriefItem, Brief
-│   ├── db.py                        # Postgres schema + connection helper (all tables, one place)
+│   ├── db.py                        # Postgres connection helper (psycopg2, DSN from NEWS_RADAR_DSN); schema via alembic/versions/
 │   ├── domain/
 │   │   ├── __init__.py
 │   │   └── interfaces.py            # Filter / Pipe / Sink / Pipeline (drafted) + Analyzer / AnalysisPipeline (to add)
